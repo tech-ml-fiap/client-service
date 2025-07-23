@@ -1,0 +1,112 @@
+name: CI/CD – ClientService
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO_NAME: clientservice
+  TF_DIR: infra      # pasta com seus .tf
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run tests + coverage
+        run: |
+          pytest --cov=app --cov-report=xml
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      # ---------- Terraform ----------
+      - uses: hashicorp/setup-terraform@v2
+        with: {terraform_version: 1.7.5}
+
+      - name: Terraform init + apply (ECR, VPC, RDS, ECS)
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      # ---------- Docker ----------
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Get ECR URL
+        id: ecr
+        run: |
+          echo "url=$(aws ecr describe-repositories \
+               --repository-names $ECR_REPO_NAME \
+               --query 'repositories[0].repositoryUri' \
+               --output text)" >> $GITHUB_OUTPUT
+
+      - name: Login ECR
+        run: aws ecr get-login-password --region $AWS_REGION \
+             | docker login --username AWS --password-stdin ${{ steps.ecr.outputs.url }}
+
+      - name: Build & push image
+        run: |
+          docker build -t $ECR_REPO_NAME:${{ github.sha }} .
+          docker tag  $ECR_REPO_NAME:${{ github.sha }} \
+                      ${{ steps.ecr.outputs.url }}:${{ github.sha }}
+          docker push ${{ steps.ecr.outputs.url }}:${{ github.sha }}
+
+      # ---------- Atualiza task definition ----------
+      - name: Render tarefa Fargate
+        run: |
+          sed "s|IMAGE_URI|${{ steps.ecr.outputs.url }}:${{ github.sha }}|" \
+              ecs/taskdef.json.tpl > ecs/taskdef.json
+
+      - name: Register new task def
+        id: taskdef
+        run: |
+          arn=$(aws ecs register-task-definition \
+              --cli-input-json file://ecs/taskdef.json \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text)
+          echo "arn=$arn" >> $GITHUB_OUTPUT
+
+      - name: Update service
+        run: |
+          aws ecs update-service --cluster clientservice-cluster \
+                                 --service clientservice-svc \
+                                 --task-definition ${{ steps.taskdef.outputs.arn }}
+
+      # ---------- Rodar migração ----------
+      - name: Run DB migrations task
+        run: |
+          aws ecs run-task \
+            --cluster clientservice-cluster \
+            --launch-type FARGATE \
+            --task-definition ${{ steps.taskdef.outputs.arn }} \
+            --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxx],securityGroups=[sg-xxxx],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"app","command":["alembic","upgrade","head"]}]}'
