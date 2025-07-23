@@ -20,8 +20,11 @@ class CPF:
     def __post_init__(self) -> None:
         digits = _DIGITS_RE.sub("", self.value)
         object.__setattr__(self, "value", digits)
+
         if len(digits) != 11 or not digits.isdigit():
             raise ValueError("CPF inválido (tamanho)")
+        if digits == digits[0] * 11:
+            raise ValueError("CPF inválido (sequência repetida)")
         if digits[-2:] != _calc_digit(digits[:9]) + _calc_digit(digits[:10]):
             raise ValueError("CPF inválido (dígitos verificadores)")
 

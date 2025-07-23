@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/verify",
+    "",
     response_model=TokenVerifyOut,
     responses={
         400: {"description": "Token ausente ou mal-formado"},

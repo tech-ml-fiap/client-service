@@ -1,4 +1,3 @@
-# app/adapters/driven/repositories/customer.py
 import re
 from typing import List, Optional
 from sqlalchemy.orm import Session
