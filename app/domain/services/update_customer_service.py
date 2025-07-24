@@ -37,7 +37,10 @@ class UpdateCustomerService:
         # e-mail
         if "email" in updates:
             new_email = Email(updates["email"])
-            if self.repo.find_by_email(new_email.value) and new_email.value != cust.email.value:
+            if (
+                self.repo.find_by_email(new_email.value)
+                and new_email.value != cust.email.value
+            ):
                 raise ValueError("E-mail já cadastrado.")
             cust.email = new_email
 

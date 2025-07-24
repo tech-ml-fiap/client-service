@@ -1,4 +1,3 @@
-import time
 from datetime import timedelta, datetime
 
 import pytest
@@ -9,7 +8,6 @@ from app.shared.handles.jwt_user import (
     verify_jwt,
     get_password_hash,
     verify_password,
-    SECRET_KEY,
     ALGORITHM,
 )
 

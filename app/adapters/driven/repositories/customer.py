@@ -71,10 +71,7 @@ class CustomerRepository(CustomerRepositoryPort):
 
     def list_all(self) -> List[Customer]:
         """Implementação requerida pela interface."""
-        return [
-            self._to_domain(m)
-            for m in self.session.query(CustomerModel).all()
-        ]
+        return [self._to_domain(m) for m in self.session.query(CustomerModel).all()]
 
     # alias opcional – remove se não precisar de compatibilidade
     find_all = list_all
@@ -85,9 +82,9 @@ class CustomerRepository(CustomerRepositoryPort):
         if not model:
             raise ValueError("Customer not found")
 
-        model.name   = customer.name
-        model.email  = customer.email.value
-        model.cpf    = self._sanitize_cpf(customer.cpf.value)
+        model.name = customer.name
+        model.email = customer.email.value
+        model.cpf = self._sanitize_cpf(customer.cpf.value)
         model.active = customer.active
 
         self.session.commit()

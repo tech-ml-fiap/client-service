@@ -7,8 +7,7 @@ client = TestClient(app)
 
 
 @scenario("features/identify_customer.feature", "Cliente existente recebe JWT")
-def test_identify_customer():
-    ...
+def test_identify_customer(): ...
 
 
 @given(parsers.parse('existe um cliente com CPF "{cpf}"'))

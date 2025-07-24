@@ -6,10 +6,8 @@ from sqlalchemy.pool import StaticPool
 from app.domain.value_objects.cpf import CPF
 from app.domain.value_objects.email import Email
 from database import Base
-from app.adapters.driven.models import customer_model
 from app.adapters.driven.repositories.customer import CustomerRepository
 from app.domain.entities.customer import Customer
-
 
 
 @pytest.fixture

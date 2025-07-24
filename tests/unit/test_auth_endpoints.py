@@ -20,7 +20,6 @@ def override_db():
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
     from database import Base
-    from app.adapters.driven.models import customer_model  # importa modelos
     from app.adapters.driver.dependencies import get_db
 
     engine = create_engine(
@@ -57,7 +56,9 @@ def test_verify_malformed_token():
 
 
 def test_verify_expired_token():
-    tok = create_access_token({"cpf": "12345678909"}, expires_delta=timedelta(seconds=-1))
+    tok = create_access_token(
+        {"cpf": "12345678909"}, expires_delta=timedelta(seconds=-1)
+    )
     r = client.post("/api/auth", json={"token": tok})
     assert r.status_code == 401
     assert r.json()["detail"] == "Token expirado"
