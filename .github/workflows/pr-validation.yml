@@ -35,17 +35,19 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
-  sonar_scan:
+  ssonar_scan:
     name: SonarCloud Scan
     runs-on: ubuntu-latest
     needs: build_and_test
     steps:
       - uses: actions/checkout@v4
 
-      - name: SonarCloud analysis
+      - name: SonarCloud Scan
         uses: sonarsource/sonarcloud-github-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
-          projectBaseDir: .
+          projectBaseDir: .             # onde está seu sonar-project.properties
           args: >
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.qualitygate.wait=true
+   
