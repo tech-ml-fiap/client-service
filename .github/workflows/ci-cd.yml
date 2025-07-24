@@ -2,7 +2,7 @@ name: CI/CD – ClientService
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main_2 ]
   pull_request:
 
 env:
