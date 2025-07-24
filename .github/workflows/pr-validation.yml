@@ -36,16 +36,16 @@ jobs:
           path: coverage.xml
 
   sonar_scan:
-    name: SonarQube Scan
+    name: SonarCloud Scan
     runs-on: ubuntu-latest
     needs: build_and_test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install scanner
-        run: pip install sonar-scanner
-
-      - name: Run SonarScanner
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: sonar-scanner -Dsonar.login=$SONAR_TOKEN
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarcloud-github-action@v2
+        with:
+          # Somente SonarCloud:
+          organization: ${{ secrets.SONAR_ORGANIZATION }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
