@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.adapters.driven.repositories.customer import CustomerRepository
@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/verify",
+    "",
     response_model=TokenVerifyOut,
     responses={
         400: {"description": "Token ausente ou mal-formado"},

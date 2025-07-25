@@ -1,0 +1,8 @@
+[tool.ruff]
+# Quais diretórios analisar
+#src = ["app"]
+#select = ["E", "F", "I", "R", "B", "TC"]
+#ignore = []                # compatíveis com estilo Black
+line-length = 88
+
+#fixable = True

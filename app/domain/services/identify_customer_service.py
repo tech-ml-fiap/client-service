@@ -9,7 +9,7 @@ class IdentifyCustomerService:
 
     def execute(self, cpf: str) -> str:
         clean_cpf = CPF(cpf).value
-        customer  = self.repo.find_by_cpf(clean_cpf)
+        customer = self.repo.find_by_cpf(clean_cpf)
         if not customer or not customer.active:
             raise ValueError("CPF não encontrado ou inativo.")
 

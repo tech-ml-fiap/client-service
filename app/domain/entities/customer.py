@@ -9,7 +9,6 @@ from app.domain.value_objects.email import Email
 
 @dataclass(slots=True)
 class Customer:
-
     id: Optional[int]
     name: str
     cpf: CPF

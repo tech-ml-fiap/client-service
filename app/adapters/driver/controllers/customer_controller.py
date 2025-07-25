@@ -4,8 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.adapters.driven.repositories.customer import CustomerRepository
-from app.adapters.driver.controllers.schemas import CustomerOut, CustomerIn, CustomersOut, CustomerIdentifyOut, \
-    CustomerUpdateIn
+from app.adapters.driver.controllers.schemas import (
+    CustomerOut,
+    CustomerIn,
+    CustomersOut,
+    CustomerIdentifyOut,
+    CustomerUpdateIn,
+)
 from app.domain.entities.customer import Customer
 from app.adapters.driver.dependencies import get_db
 from app.domain.services.create_customer_service import CreateCustomerService
@@ -37,11 +42,11 @@ def _to_response(entity: Customer) -> CustomerOut:
     responses={
         400: {
             "description": (
-                    "Falha de validação ou regras de negócio.\n\n"
-                    "- **CPF inválido**\n"
-                    "- **E-mail inválido**\n"
-                    "- **CPF já cadastrado**\n"
-                    "- **E-mail já cadastrado**"
+                "Falha de validação ou regras de negócio.\n\n"
+                "- **CPF inválido**\n"
+                "- **E-mail inválido**\n"
+                "- **CPF já cadastrado**\n"
+                "- **E-mail já cadastrado**"
             ),
             "content": {
                 "application/json": {
@@ -72,7 +77,7 @@ def create_customer(payload: CustomerIn, db: Session = Depends(get_db)):
     service = CreateCustomerService(CustomerRepository(db))
 
     try:
-        cpf_vo   = CPF(payload.cpf)
+        cpf_vo = CPF(payload.cpf)
         email_vo = Email(payload.email)
 
         customer = Customer(
@@ -158,9 +163,7 @@ def identify_customer(cpf: str, db: Session = Depends(get_db)):
         404: {
             "description": "Cliente não encontrado",
             "content": {
-                "application/json": {
-                    "example": {"detail": "Cliente não encontrado"}
-                }
+                "application/json": {"example": {"detail": "Cliente não encontrado"}}
             },
         },
     },

@@ -6,7 +6,6 @@ from app.domain.entities.customer import Customer
 
 
 class CustomerRepositoryPort(ABC):
-
     # ---------- C ----------
     @abstractmethod
     def create(self, customer: Customer) -> Customer: ...

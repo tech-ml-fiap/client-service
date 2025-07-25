@@ -9,8 +9,9 @@ bearer_scheme = HTTPBearer()
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Client-Service")
-    app.include_router(client_router, prefix="/api", tags=["clients"])
-    app.include_router(auth_router, prefix="/api", tags=["auth"])
+    app.include_router(client_router, prefix="/api/client", tags=["clients"])
+    app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
     return app
+
 
 app = create_app()

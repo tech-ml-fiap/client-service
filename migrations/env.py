@@ -1,5 +1,4 @@
 import os
-import sys
 from logging.config import fileConfig
 from dotenv import load_dotenv
 
@@ -8,8 +7,6 @@ from sqlalchemy import engine_from_config, pool
 
 from app.adapters.driven.models import customer_model
 # 1) Importa o seu Base e models, para o Alembic saber quais tabelas existem
-from database import Base
-from app.adapters.driven import models
 
 # 3) Obtemos a configuração do Alembic
 config = context.config
