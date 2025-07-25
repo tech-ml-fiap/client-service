@@ -13,27 +13,14 @@ data "aws_subnets" "public" {
 }
 
 ###############################################
-#  IAM – LabRole                               #
+#  IAM – LabRole                              #
 ###############################################
 data "aws_iam_role" "lab" {
   name = var.exec_role_name
 }
 
 ###############################################
-#  CloudWatch Logs                             #
-###############################################
-resource "random_id" "suffix" {
-  byte_length = 4
-}
-
-resource "aws_cloudwatch_log_group" "app" {
-  name = "/ecs/${var.service_name}-${random_id.suffix.hex}"
-  retention_in_days = 7
-}
-
-
-###############################################
-#  Security-Groups                             #
+#  Security Groups                            #
 ###############################################
 # ALB SG
 resource "aws_security_group" "alb_sg" {
@@ -78,7 +65,7 @@ resource "aws_security_group" "task_sg" {
 }
 
 ###############################################
-#  ECS Cluster & Task Definition               #
+#  ECS Cluster & Task Definition              #
 ###############################################
 resource "aws_ecs_cluster" "this" {
   name = "${var.service_name}-cluster"
@@ -94,20 +81,12 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([
     {
-      name  = var.service_name
-      image = var.image_uri
+      name      = var.service_name
+      image     = var.image_uri
       essential = true
       portMappings = [
         { containerPort = var.container_port, protocol = "tcp" }
       ]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options   = {
-          awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
-        }
-      }
       environment = [
         { name = "DB_HOST",     value = var.db_host },
         { name = "DB_PORT",     value = var.db_port },
@@ -180,7 +159,7 @@ resource "aws_ecs_service" "app" {
   }
 
   lifecycle {
-    ignore_changes = [task_definition]  # permite atualizar TD sem recriar Service
+    ignore_changes = [task_definition] # permite atualizar TD sem recriar Service
   }
 }
 
@@ -201,4 +180,3 @@ aws ecs run-task \
 EOT
   }
 }
-
