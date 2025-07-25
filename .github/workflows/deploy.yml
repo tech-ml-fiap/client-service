@@ -1,66 +1,76 @@
-name: Deploy to AWS
+name: Build, Push & Deploy
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
+
+env:
+  AWS_REGION:          ${{ secrets.AWS_REGION }}
+  SERVICE_NAME:        client-service
 
 jobs:
   deploy:
-    name: Terraform Apply & ECS Deploy
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra
+
     steps:
+      # 1. Checkout
       - uses: actions/checkout@v4
 
+      # 2. AWS creds (inclui session-token da Academy)
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+      # 3. Build & Push
+      - name: Build and Push to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ github.sha }}
+
+      # 4. Install jq (para tratar JSON mais tarde)
+      - run: sudo apt-get update -qq && sudo apt-get install -y jq
+
+      # 5. Setup Terraform
+      - uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.7.5
 
-      - name: Terraform Format
-        id: fmt
-        run: terraform fmt -check
-        continue-on-error: true
-
-      - name: Terraform Init
-        id: init
-        run: terraform init -input=false
-
-      - name: Apply
-        id: apply
+      # 6. Terraform init/plan/apply
+      - name: Terraform Apply
+        working-directory: infra
         env:
-          TF_VAR_db_host     : ${{ secrets.DB_HOST }}
-          TF_VAR_db_port     : ${{ secrets.DB_PORT }}
-          TF_VAR_db_user     : ${{ secrets.DB_USER }}
-          TF_VAR_db_password : ${{ secrets.DB_PASSWORD }}
-          TF_VAR_db_name     : ${{ secrets.DB_NAME }}
-        run: terraform apply -auto-approve
-
-      - name: Run DB migrations
-        id: migrate
+          TF_VAR_service_name : ${{ env.SERVICE_NAME }}
+          TF_VAR_image_uri    : ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          TF_VAR_db_host      : ${{ secrets.DB_HOST }}
+          TF_VAR_db_port      : ${{ secrets.DB_PORT }}
+          TF_VAR_db_user      : ${{ secrets.DB_USER }}
+          TF_VAR_db_password  : ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_name      : ${{ secrets.DB_NAME }}
         run: |
-            CLUSTER_NAME=$(terraform output -raw cluster_name)
-            TASK_DEFINITION=$(terraform output -raw ecs_task_definition_arn)
-            
-            aws ecs run-task \
-              --cluster $CLUSTER_NAME \
-              --launch-type FARGATE \
-              --task-definition $TASK_DEFINITION \
-              --network-configuration "awsvpcConfiguration={subnets=$(terraform output -json default_subnets),securityGroups=$(terraform output -raw default_sg),assignPublicIp=ENABLED}" \
-              --overrides '{
-                "containerOverrides": [
-                  {
-                    "name": "'${var.service_name}'",
-                    "command": ["alembic","upgrade","head"]
-                  }
-                ]
-              }'
+          terraform -chdir=./infra init -input=false
+          terraform -chdir=./infra apply -auto-approve -input=false
+
+      # 7. Migrations
+      - name: Run DB migrations
+        working-directory: infra
+        run: |
+          CLUSTER=$(terraform output -raw cluster_name)
+          TASK=$(terraform output -raw ecs_task_definition_arn)
+          APP=$(terraform output -raw service_name)
+          SUBNETS=$(terraform output -json default_subnets | jq -c)
+          SG=$(jq -nc --arg sg "$(terraform output -raw default_sg)" '[$sg]')
+
+          aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --launch-type FARGATE \
+            --task-definition "$TASK" \
+            --network-configuration "awsvpcConfiguration={subnets=$SUBNETS,securityGroups=$SG,assignPublicIp=ENABLED}" \
+            --overrides "{\"containerOverrides\":[{\"name\":\"$APP\",\"command\":[\"alembic\",\"upgrade\",\"head\"]}]}" \
+            --region "$AWS_REGION"

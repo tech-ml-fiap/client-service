@@ -53,3 +53,17 @@ variable "ecr_repo_name" {
   type        = string
   default     = "clientservice"
 }
+
+variable "image_uri" {
+  type        = string
+}
+
+variable "cpu" {
+  type        = number
+  default         = 256
+}
+
+variable "memory" {
+  type        = number
+  default         = 512
+}
