@@ -34,4 +34,3 @@ resource "aws_ecs_task_definition" "this" {
   ])
 }
 
-image = aws_ecr_repository.app.repository_url
