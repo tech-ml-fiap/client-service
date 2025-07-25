@@ -22,10 +22,15 @@ data "aws_iam_role" "lab" {
 ###############################################
 #  CloudWatch Logs                             #
 ###############################################
+resource "random_id" "suffix" {
+  byte_length = 4
+}
+
 resource "aws_cloudwatch_log_group" "app" {
-  name              = "/ecs/${var.service_name}"
+  name = "/ecs/${var.service_name}-${random_id.suffix.hex}"
   retention_in_days = 7
 }
+
 
 ###############################################
 #  Security-Groups                             #
