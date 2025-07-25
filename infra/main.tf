@@ -52,10 +52,12 @@ resource "aws_security_group" "app_sg" {
 ############################
 # Instance Profile usando LabRole existente
 ############################
-data "aws_iam_role" "lab" { arn = var.execution_role }
+data "aws_iam_role" "lab" {
+  name = var.execution_role_name   # "LabRole"
+}
 
 data "aws_iam_instance_profile" "lab_profile" {
-  name = data.aws_iam_role.lab.name         # assume que já existe
+  name = var.execution_role_name   # assume que o instance-profile tem o mesmo nome
 }
 
 ############################
