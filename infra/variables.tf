@@ -1,5 +1,3 @@
-# infra/variables.tf
-
 variable "aws_region" {
   description = "Região AWS onde os recursos serão criados"
   type        = string
@@ -53,5 +51,5 @@ variable "container_port" {
 variable "ecr_repo_name" {
   description = "Nome do repositório ECR"
   type        = string
-  default     = "clientservice"    # ou derive via Terraform var
+  default     = "clientservice"
 }
