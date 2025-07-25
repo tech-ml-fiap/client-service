@@ -1,65 +1,107 @@
-name: CI/CD – Build, Push, Terraform
+name: ClientService – CI/CD
 
 on:
-  push:
-    branches: [main, master]
+  push:    { branches: [ main ] }
+  pull_request:
 
 env:
-  AWS_REGION:   us-east-1                # ajuste se necessário
-  SERVICE_NAME: client-service
-  PORT:         8000
+  AWS_REGION   : us-east-1
+  ECR_REPO_NAME: clientservice
+  TF_DIR       : infra
 
 jobs:
-  deploy:
+# ----------------------------------------------------------------- TESTES
+  build_test:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+      - name: Run tests (80 %)
+        run : pytest --cov=app --cov-report=xml --cov-fail-under=80
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage, path: coverage.xml }
+
+# -------------------------------------------------------- PLAN TERRAFORM
+  terraform_plan:
+    needs: build_test
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: ${{ env.TF_DIR }} } }
 
     steps:
-      # Checkout
       - uses: actions/checkout@v4
-
-      # Credenciais (vêm do AWS Academy, role voclabs já tem ECR PutImage)
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id    : ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
-          role-skip-session-tagging: true
-
-      # Login & tag dinâmica
-      - uses: aws-actions/amazon-ecr-login@v2
-        id: ecr
-
-      # Build & push
-      - uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ steps.ecr.outputs.registry }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-
-      # Terraform
+          aws-region           : ${{ env.AWS_REGION }}
       - uses: hashicorp/setup-terraform@v2
         with: { terraform_version: 1.7.5 }
 
-      - name: Terraform Init & Apply
-        working-directory: infra
+      - run: terraform init -input=false
+      - run: terraform validate
+      - run: terraform plan -out=plan.bin
+
+# ---------------------------------------------------------- APPLY + MIGRA
+  deploy:
+    if   : github.ref == 'refs/heads/main'         # só na branch main
+    needs: terraform_plan
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: ${{ env.TF_DIR }} } }
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id    : ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region           : ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v2
+        with: { terraform_version: 1.7.5 }
+
+      - name: Terraform Apply
         env:
-          TF_VAR_aws_region     : ${{ env.AWS_REGION }}
-          TF_VAR_service_name   : ${{ env.SERVICE_NAME }}
-          TF_VAR_container_port : ${{ env.PORT }}
-          TF_VAR_image_uri      : ${{ steps.ecr.outputs.registry }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-          TF_VAR_exec_role_name : LabRole                       # ou outro nome se diferente
-          TF_VAR_db_host        : ${{ secrets.DB_HOST }}
-          TF_VAR_db_port        : ${{ secrets.DB_PORT }}
-          TF_VAR_db_user        : ${{ secrets.DB_USER }}
-          TF_VAR_db_password    : ${{ secrets.DB_PASSWORD }}
-          TF_VAR_db_name        : ${{ secrets.DB_NAME }}
+          TF_VAR_db_host     : ${{ secrets.DB_HOST }}
+          TF_VAR_db_port     : ${{ secrets.DB_PORT }}
+          TF_VAR_db_user     : ${{ secrets.DB_USER }}
+          TF_VAR_db_password : ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_name     : ${{ secrets.DB_NAME }}
+          TF_VAR_execution_role_arn: ${{ secrets.TF_VAR_execution_role_arn }}
         run: |
           terraform init -input=false
-          terraform apply -auto-approve -input=false
+          terraform apply -auto-approve
 
-      # Exibe URL do ALB
-      - name: Show app URL
-        working-directory: infra
-        run: echo "::notice title=URL::$(terraform output -raw alb_dns)"
+      # ---------------------------- Build & Push imagem
+      - uses: docker/setup-buildx-action@v3
+      - name: Get ECR URL
+        id: ecr
+        run: echo "url=$(aws ecr describe-repositories --repository-names $ECR_REPO_NAME --query 'repositories[0].repositoryUri' --output text)" >> $GITHUB_OUTPUT
+      - name: Login & push
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ steps.ecr.outputs.url }}
+          docker build -t $ECR_REPO_NAME:${{ github.sha }} .
+          docker tag  $ECR_REPO_NAME:${{ github.sha }} ${{ steps.ecr.outputs.url }}:${{ github.sha }}
+          docker push ${{ steps.ecr.outputs.url }}:${{ github.sha }}
+
+      # ---------------------------- Update Service (force new task)
+      - name: Update ECS Service
+        run: |
+          aws ecs update-service \
+            --cluster $(terraform output -raw cluster_name) \
+            --service $(terraform output -raw service_name) \
+            --force-new-deployment
+
+      # ---------------------------- Run migrations
+      - name: Run DB migrations
+        run: |
+          aws ecs run-task \
+            --cluster $(terraform output -raw cluster_name) \
+            --launch-type FARGATE \
+            --task-definition $(terraform output -raw task_definition_arn) \
+            --network-configuration "awsvpcConfiguration={subnets=$(terraform output -json default_subnets),securityGroups=[\"$(terraform output -raw default_sg)\"],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"clientservice-svc","command":["alembic","upgrade","head"]}]}'
