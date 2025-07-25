@@ -72,7 +72,6 @@ variable "execution_role" {
   type        = string
   default = "arn:aws:iam::049015295261:role/LabRole"
 }
-
 variable "exec_role_name" {
   description = "Nome da LabRole existente (padrão do AWS Academy)"
   type        = string
