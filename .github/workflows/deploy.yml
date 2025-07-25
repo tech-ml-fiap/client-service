@@ -1,68 +1,85 @@
-name: Build, Push & Deploy
+name: Build, Push & Deploy to AWS
 
 on:
   push:
     branches: [main, master]
 
 env:
-  AWS_REGION:          ${{ secrets.AWS_REGION }}
-  SERVICE_NAME:        client-service
+  AWS_REGION:   us-east-1           # ajuste se sua conta estiver noutra região
+  SERVICE_NAME: client-service      # nome do serviço ECS/Fargate
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
-      - uses: actions/checkout@v4
+      # 1. Código do repositório
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # 2. AWS creds (inclui session-token da Academy)
-      - uses: aws-actions/configure-aws-credentials@v4
+      # 2. Credenciais temporárias da AWS Academy
+      - name: Configurar credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      # 3. Build & Push
-      - name: Build and Push to ECR
+      # 3. Login no ECR → expõe steps.ecr.outputs.registry
+      - name: Login no Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 4. Build & push da imagem Docker
+      - name: Build e push para ECR
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: .                        # diretório raiz do repo (onde está o Dockerfile)
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
 
-      # 4. Install jq (para tratar JSON mais tarde)
-      - run: sudo apt-get update -qq && sudo apt-get install -y jq
+      # 5. jq – ajuda a formatar listas JSON no passo de migrations
+      - name: Instalar jq
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq
 
-      # 5. Setup Terraform
-      - uses: hashicorp/setup-terraform@v2
+      # 6. Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.7.5
 
-      # 6. Terraform init/plan/apply
-      - name: Terraform Apply
-        working-directory: infra
+      # 6.1 Init
+      - name: Terraform init
+        run: terraform -chdir=infra init -input=false
+
+      # 6.2 (opcional) plan só para log
+      - name: Terraform plan
+        run: terraform -chdir=infra plan -input=false
+
+      # 6.3 Apply
+      - name: Terraform apply
         env:
           TF_VAR_service_name : ${{ env.SERVICE_NAME }}
-          TF_VAR_image_uri    : ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          TF_VAR_image_uri    : ${{ steps.ecr.outputs.registry }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
           TF_VAR_db_host      : ${{ secrets.DB_HOST }}
           TF_VAR_db_port      : ${{ secrets.DB_PORT }}
           TF_VAR_db_user      : ${{ secrets.DB_USER }}
           TF_VAR_db_password  : ${{ secrets.DB_PASSWORD }}
           TF_VAR_db_name      : ${{ secrets.DB_NAME }}
-        run: |
-          terraform -chdir=./infra init -input=false
-          terraform -chdir=./infra apply -auto-approve -input=false
+        run: terraform -chdir=infra apply -auto-approve -input=false
 
-      # 7. Migrations
+      # 7. Executar migrations após o deploy
       - name: Run DB migrations
-        working-directory: infra
         run: |
+          cd infra
+
           CLUSTER=$(terraform output -raw cluster_name)
-          TASK=$(terraform output -raw ecs_task_definition_arn)
+          TASK_DEF=$(terraform output -raw ecs_task_definition_arn)
           APP=$(terraform output -raw service_name)
           SUBNETS=$(terraform output -json default_subnets | jq -c)
           SG=$(jq -nc --arg sg "$(terraform output -raw default_sg)" '[$sg]')
@@ -70,7 +87,7 @@ jobs:
           aws ecs run-task \
             --cluster "$CLUSTER" \
             --launch-type FARGATE \
-            --task-definition "$TASK" \
+            --task-definition "$TASK_DEF" \
             --network-configuration "awsvpcConfiguration={subnets=$SUBNETS,securityGroups=$SG,assignPublicIp=ENABLED}" \
             --overrides "{\"containerOverrides\":[{\"name\":\"$APP\",\"command\":[\"alembic\",\"upgrade\",\"head\"]}]}" \
             --region "$AWS_REGION"
