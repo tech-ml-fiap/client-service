@@ -1,87 +1,95 @@
 name: Deploy AWS – Client-Service
+
 on:
   push:
     branches: [ master ]
 
 env:
-  AWS_REGION  : us-east-1
-  SERVICE_NAME: client-service
-  PORT        : 8000
+  AWS_REGION  : us-east-1          # região do Academy
+  SERVICE_NAME: client-service     # nome do repo, cluster, etc.
+  PORT        : 8000               # porta exposta pelo container
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # 1 – Checkout
+    # 1) Checkout do código
     - uses: actions/checkout@v4
 
-    # 2 – Credenciais lab
+    # 2) Credenciais + assume LabRole (permissão total na conta)
     - uses: aws-actions/configure-aws-credentials@v4
       with:
-        aws-access-key-id    : ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-session-token    : ${{ secrets.AWS_SESSION_TOKEN }}
-        aws-region           : ${{ env.AWS_REGION }}
-        role-skip-session-tagging: true
+        aws-access-key-id     : ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key : ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token     : ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region            : ${{ env.AWS_REGION }}
+        role-to-assume        : arn:aws:iam::049015295261:role/LabRole
+        role-session-name     : gha-ci
+        role-skip-session-tagging: true   # evita erro sts:TagSession
 
-    # 3 – Account ID
-    - id: acct
-      run: echo "ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+    # 3) Descobre ACCOUNT_ID e monta REPO_URL
+    - id: account
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+        echo "REPO_URL=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}" >> $GITHUB_ENV
 
-    # 4 – Terraform CLI
+    # 4) Instala Terraform
     - uses: hashicorp/setup-terraform@v2
       with: { terraform_version: 1.7.5 }
 
-    # 5 – ECR
-    - name: Terraform – ECR
+    #─────────────────────────
+    # 5) MÓDULO   E C R
+    #─────────────────────────
+    - name: Terraform – ECR (cria ou importa)
       working-directory: infra/ecr
       env:
         TF_VAR_aws_region    : ${{ env.AWS_REGION }}
         TF_VAR_ecr_repo_name : ${{ env.SERVICE_NAME }}
       run: |
         terraform init -input=false
-        terraform apply -auto-approve -input=false || \
+        terraform apply  -auto-approve -input=false || \
         terraform import aws_ecr_repository.app_repo ${SERVICE_NAME}
 
-    # 6 – Repo URL
-    - run: echo "REPO_URL=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}" >> $GITHUB_ENV
-
-    # 7 – Login ECR
+    # 6) Login no ECR (apenas GetAuthorizationToken)
     - run: |
         aws ecr get-login-password --region $AWS_REGION | \
         docker login --username AWS --password-stdin $REPO_URL
 
-    # 8 – Build & push
+    # 7) Build & Push da imagem
     - uses: docker/setup-buildx-action@v3
     - uses: docker/build-push-action@v5
       with:
+        context: .
         push: true
         tags: ${{ env.REPO_URL }}:${{ github.sha }}
 
-    #─────────────────────────────────────────────
-    # Importa ALB, Target-Group e SG se existirem
-    #─────────────────────────────────────────────
-    - name: Importar ALB-TG-SG existentes
+    #────────────────────────────────────────
+    # 8) Importa ALB / Target Group / SG se já existirem
+    #────────────────────────────────────────
+    - name: Importar ALB, TG e SG existentes
       working-directory: infra/ecs
       run: |
         terraform init -input=false
-
-        # Função simples para normalizar saída
-        norm() { [ "$1" = "None" ] || [ "$1" = "none" ] || [ "$1" = "null" ] && echo "" || echo "$1"; }
+        norm() { [ "$1" = "None" ] || [ "$1" = "null" ] && echo "" || echo "$1"; }
 
         VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
                     --query 'Vpcs[0].VpcId' --output text)
 
         LB_ARN=$(norm $(aws elbv2 describe-load-balancers \
-                  --names "${SERVICE_NAME}-alb" \
-                  --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo ""))
+                   --names "${SERVICE_NAME}-alb" \
+                   --query 'LoadBalancers[0].LoadBalancerArn' \
+                   --output text 2>/dev/null || echo ""))
         TG_ARN=$(norm $(aws elbv2 describe-target-groups \
-                  --names "${SERVICE_NAME}-tg" \
-                  --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo ""))
+                   --names "${SERVICE_NAME}-tg" \
+                   --query 'TargetGroups[0].TargetGroupArn' \
+                   --output text 2>/dev/null || echo ""))
         SG_ID=$(norm $(aws ec2 describe-security-groups \
-                 --filters Name=vpc-id,Values=${VPC_ID} Name=group-name,Values=${SERVICE_NAME}-alb-sg \
-                 --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo ""))
+                  --filters Name=vpc-id,Values=${VPC_ID} \
+                            Name=group-name,Values=${SERVICE_NAME}-alb-sg \
+                  --query 'SecurityGroups[0].GroupId' \
+                  --output text 2>/dev/null || echo ""))
 
         echo "::group::Import summary"
         echo "LB_ARN=$LB_ARN"
@@ -89,25 +97,13 @@ jobs:
         echo "SG_ID=$SG_ID"
         echo "::endgroup::"
 
-        if [ -n "$LB_ARN" ]; then
-          terraform import -input=false aws_lb.app "$LB_ARN"
-        else
-          echo "• LB não encontrado – skip import"
-        fi
+        [ -n "$LB_ARN" ] && terraform import -input=false aws_lb.app "$LB_ARN" || true
+        [ -n "$TG_ARN" ] && terraform import -input=false aws_lb_target_group.tg "$TG_ARN" || true
+        [ -n "$SG_ID"  ] && terraform import -input=false aws_security_group.alb_sg "$SG_ID" || true
 
-        if [ -n "$TG_ARN" ]; then
-          terraform import -input=false aws_lb_target_group.tg "$TG_ARN"
-        else
-          echo "• TG não encontrado – skip import"
-        fi
-
-        if [ -n "$SG_ID" ]; then
-          terraform import -input=false aws_security_group.alb_sg "$SG_ID"
-        else
-          echo "• SG não encontrado – skip import"
-        fi
-
-    # 9 – ECS / ALB apply
+    #─────────────────────────
+    # 9) MÓDULO   E C S / A L B
+    #─────────────────────────
     - name: Terraform – ECS/ALB
       working-directory: infra/ecs
       env:
@@ -123,7 +119,7 @@ jobs:
         TF_VAR_db_name        : ${{ secrets.DB_NAME }}
       run: terraform apply -auto-approve -input=false
 
-    # 10 – URL do ALB
-    - name: Show URL
+    # 10) Mostra a URL do ALB
+    - name: Mostrar URL
       working-directory: infra/ecs
       run: echo "::notice title=ALB URL::$(terraform output -raw alb_dns)"
