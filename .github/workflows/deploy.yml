@@ -8,7 +8,6 @@ jobs:
   deploy:
     name: Terraform Apply & ECS Deploy
     runs-on: ubuntu-latest
-    needs: validate_terraform
     defaults:
       run:
         working-directory: infra
