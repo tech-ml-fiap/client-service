@@ -43,9 +43,9 @@ jobs:
           TF_VAR_aws_region     : ${{ env.AWS_REGION }}
           TF_VAR_ecr_repo_name  : ${{ env.SERVICE_NAME }}
         run: |
-          terraform -chdir=ecr init -input=false
-          terraform -chdir=ecr apply -auto-approve -input=false \
-            || terraform -chdir=ecr import aws_ecr_repository.app_repo ${SERVICE_NAME}
+          terraform init -input=false
+          terraform apply -auto-approve -input=false \
+          || terraform import aws_ecr_repository.app_repository ${SERVICE_NAME}
 
       # 6) Docker & Buildx
       - run: |
