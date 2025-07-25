@@ -49,3 +49,9 @@ variable "container_port" {
   type        = number
   default     = 8000
 }
+
+variable "ecr_repo_name" {
+  description = "Nome do repositório ECR"
+  type        = string
+  default     = "clientservice"    # ou derive via Terraform var
+}
