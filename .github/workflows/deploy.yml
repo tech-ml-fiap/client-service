@@ -1,96 +1,93 @@
 name: Deploy AWS – Client-Service
-
 on:
   push:
     branches: [ master ]
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION  : us-east-1
   SERVICE_NAME: client-service
-  PORT: 8000
+  PORT        : 8000
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Checkout
-      - uses: actions/checkout@v4
-      # 2) Credenciais do lab
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region:            ${{ secrets.AWS_REGION }}
-          role-skip-session-tagging: true   # evita erro sts:TagSession :contentReference[oaicite:3]{index=3}
+    # 1) Checkout
+    - uses: actions/checkout@v4
 
-      # 3) Descobre Account-ID (garante que repo seja criado no MESMO ID) :contentReference[oaicite:4]{index=4}
-      - name: Detect ACCOUNT_ID
-        id: awsid
-        run: |
-          echo "ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+    # 2) Credenciais básicas (voclabs)
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id     : ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key : ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token     : ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region            : ${{ env.AWS_REGION }}
+        role-skip-session-tagging: true
 
-      # 4) Instala Terraform
-      - uses: hashicorp/setup-terraform@v2
-        with: { terraform_version: 1.7.5 }
+    # 3) Calcula ACCOUNT_ID e REPO_URL
+    - id: vars
+      run: |
+        ACC=$(aws sts get-caller-identity --query Account --output text)
+        echo "ACCOUNT_ID=$ACC"          >> $GITHUB_ENV
+        echo "REPO_URL=$ACC.dkr.ecr.$AWS_REGION.amazonaws.com/$SERVICE_NAME" >> $GITHUB_ENV
 
-      # 5) Cria / importa repositório ECR
-      - name: Terraform – ECR
-        working-directory: infra/ecr          # <-- pasta onde estão os .tf
-        env:
-          TF_VAR_aws_region: ${{ env.AWS_REGION }}
-          TF_VAR_ecr_repo_name: ${{ env.SERVICE_NAME }}
-        run: |
-          terraform init -input=false
-          terraform apply -auto-approve -input=false \
-          || terraform import aws_ecr_repository.app_repo ${SERVICE_NAME}
+    # 4) Login no ECR + Build & Push da imagem
+    - run: |
+        aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin $REPO_URL
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ env.REPO_URL }}:${{ github.sha }}
 
-      # 6) Docker & Buildx
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v5
-        with:
-         tags: ${{ env.REPO_URL }}:${{ github.sha }}
-         push: true
+    # 5) Instala Terraform (para módulo ECS)
+    - uses: hashicorp/setup-terraform@v2
+      with: { terraform_version: 1.7.5 }
 
-      # 7) Repo URL para tag
-      - name: Get ECR URL
-        id: ecr
-        run: |
-          echo "REPO_URL=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}" >> $GITHUB_ENV
+    # 6) Importa ALB / TG / SG (se existirem)
+    - name: Import ALB/TG/SG
+      working-directory: infra/ecs
+      run: |
+        terraform init -input=false
+        norm() { [ "$1" = "None" ] || [ "$1" = "null" ] && echo "" || echo "$1"; }
 
-      # 8) Login no ECR (precisa ecr:GetAuthorizationToken) :contentReference[oaicite:5]{index=5}
-      - name: ECR login
-        run: |
-          aws ecr get-login-password --region $AWS_REGION \
-          | docker login --username AWS --password-stdin $REPO_URL
+        LB_ARN=$(norm $(aws elbv2 describe-load-balancers \
+                   --names "${SERVICE_NAME}-alb" \
+                   --query 'LoadBalancers[0].LoadBalancerArn' \
+                   --output text 2>/dev/null || echo ""))
+        TG_ARN=$(norm $(aws elbv2 describe-target-groups \
+                   --names "${SERVICE_NAME}-tg" \
+                   --query 'TargetGroups[0].TargetGroupArn' \
+                   --output text 2>/dev/null || echo ""))
+        SG_ID=$(norm $(aws ec2 describe-security-groups \
+                 --group-names "${SERVICE_NAME}-alb-sg" \
+                 --query 'SecurityGroups[0].GroupId' \
+                 --output text 2>/dev/null || echo ""))
 
-      # 9) Build & push
-      - name: Build & push image
-        run: |
-          docker build -t $SERVICE_NAME .
-          docker tag  $SERVICE_NAME:latest $REPO_URL:${{ github.sha }}
-          docker push $REPO_URL:${{ github.sha }}
+        [ -n "$LB_ARN" ] && terraform import -input=false aws_lb.app "$LB_ARN" || true
+        [ -n "$TG_ARN" ] && terraform import -input=false aws_lb_target_group.tg "$TG_ARN" || true
+        [ -n "$SG_ID"  ] && terraform import -input=false aws_security_group.alb_sg "$SG_ID" || true
 
-      # 10) Terraform – infra ECS/ALB
-      - name: Terraform – ECS/ALB
-        working-directory: infra/ecs
-        env:
-          TF_VAR_aws_region     : ${{ secrets.AWS_REGION }}
-          TF_VAR_service_name   : ${{ env.SERVICE_NAME }}
-          TF_VAR_container_port : ${{ env.PORT }}
-          TF_VAR_image_uri      : $REPO_URL:${{ github.sha }}
-          TF_VAR_exec_role_name : LabRole
-          TF_VAR_db_host        : ${{ secrets.DB_HOST }}
-          TF_VAR_db_port        : ${{ secrets.DB_PORT }}
-          TF_VAR_db_user        : ${{ secrets.DB_USER }}
-          TF_VAR_db_password    : ${{ secrets.DB_PASSWORD }}
-          TF_VAR_db_name        : ${{ secrets.DB_NAME }}
-        run: |
-          terraform -chdir=ecs init -input=false
-          terraform -chdir=ecs apply -auto-approve -input=false
+    # 7) Aplica módulo ECS / ALB
+    - name: Terraform ECS/ALB
+      working-directory: infra/ecs
+      env:
+        TF_VAR_aws_region     : ${{ env.AWS_REGION }}
+        TF_VAR_service_name   : ${{ env.SERVICE_NAME }}
+        TF_VAR_container_port : ${{ env.PORT }}
+        TF_VAR_image_uri      : ${{ env.REPO_URL }}:${{ github.sha }}
+        TF_VAR_exec_role_name : LabRole
+        TF_VAR_db_host        : ${{ secrets.DB_HOST }}
+        TF_VAR_db_port        : ${{ secrets.DB_PORT }}
+        TF_VAR_db_user        : ${{ secrets.DB_USER }}
+        TF_VAR_db_password    : ${{ secrets.DB_PASSWORD }}
+        TF_VAR_db_name        : ${{ secrets.DB_NAME }}
+      run: terraform apply -auto-approve -input=false
 
-      # 11) URL do ALB
-      - name: Show URL
-        working-directory: infra/ecs
-        run: echo "::notice title=URL::$(terraform output -raw alb_dns)"
+    # 8) Exibe URL do ALB
+    - name: Show URL
+      working-directory: infra/ecs
+      run: echo "::notice title=ALB URL::$(terraform output -raw alb_dns)"
