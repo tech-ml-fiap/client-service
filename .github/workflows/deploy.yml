@@ -61,30 +61,39 @@ jobs:
         push: true
         tags: ${{ env.REPO_URL }}:${{ github.sha }}
 
-# ───────────────────
-# Importa ALB/TG se já existem
-# ───────────────────
-    - name: Importar ALB/TG se existirem
+      # ───────────────────────────────
+      # Importa ALB, Target-Group e SG
+      # ───────────────────────────────
+    - name: Importar recursos ALB/TG/SG se já existirem
       working-directory: infra/ecs
       run: |
         terraform init -input=false
+
+        # Descobre ARNs/IDs (retorna "" se não existir)
         LB_ARN=$(aws elbv2 describe-load-balancers \
-          --names "${SERVICE_NAME}-alb" \
-          --query 'LoadBalancers[0].LoadBalancerArn' \
-          --output text 2>/dev/null || true)
+                   --names "${SERVICE_NAME}-alb" \
+                   --query 'LoadBalancers[0].LoadBalancerArn' \
+                   --output text 2>/dev/null || true)
 
         TG_ARN=$(aws elbv2 describe-target-groups \
-          --names "${SERVICE_NAME}-tg" \
-          --query 'TargetGroups[0].TargetGroupArn' \
-          --output text 2>/dev/null || true)
+                   --names "${SERVICE_NAME}-tg" \
+                   --query 'TargetGroups[0].TargetGroupArn' \
+                   --output text 2>/dev/null || true)
 
-        if [ -n "$LB_ARN" ] && [ "$LB_ARN" != "None" ]; then
+        SG_ID=$(aws ec2 describe-security-groups \
+                  --filters "Name=group-name,Values=${SERVICE_NAME}-alb-sg" \
+                  --query 'SecurityGroups[0].GroupId' \
+                  --output text 2>/dev/null || true)
+
+        # Importa somente se o recurso existir
+        [ -n "$LB_ARN" ] && [ "$LB_ARN" != "None" ] && \
           terraform import -input=false aws_lb.app "$LB_ARN" || true
-        fi
-        if [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ]; then
+
+        [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ] && \
           terraform import -input=false aws_lb_target_group.tg "$TG_ARN" || true
-        fi
-      
+
+        [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && \
+          terraform import -input=false aws_security_group.alb_sg "$SG_ID" || true
 
       # ───────────────────
 # Fase ECS / ALB
