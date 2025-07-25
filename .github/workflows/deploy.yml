@@ -26,6 +26,7 @@ jobs:
           aws-region:            ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::049015295261:role/LabRole
           role-session-name: github-actions-deploy
+          role-skip-session-tagging: true
 
       # 3. Login no ECR (gera outputs.registry)
       - name: Login no Amazon ECR
