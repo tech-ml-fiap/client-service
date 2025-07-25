@@ -3,7 +3,7 @@ name: PR Terraform Plan
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   validate_terraform:
