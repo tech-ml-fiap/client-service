@@ -1,8 +1,16 @@
-########################
-#  Rede padrão da conta
-########################
-data "aws_vpc" "default" { default = true }
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~> 5.51" }
+#    template = { source = "hashicorp/template", version = "~> 2.3" }
+  }
+}
 
+provider "aws" { region = var.aws_region }
+
+############################
+# Rede – VPC/Subnet default
+############################
+data "aws_vpc" "default" { default = true }
 data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"
@@ -10,10 +18,21 @@ data "aws_subnets" "default" {
   }
 }
 
-# Security-group liberando a porta da aplicação
-resource "aws_security_group" "ecs_service" {
+
+############################
+# ECR (garantia extra)
+############################
+resource "aws_ecr_repository" "repo" {
+  name = var.service_name
+  lifecycle { prevent_destroy = false }
+}
+
+############################
+# Security Group
+############################
+resource "aws_security_group" "app_sg" {
   name        = "${var.service_name}-sg"
-  description = "Acesso público à aplicação"
+  description = "Public access to application"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -22,7 +41,6 @@ resource "aws_security_group" "ecs_service" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
   egress {
     from_port   = 0
     to_port     = 0
@@ -31,117 +49,51 @@ resource "aws_security_group" "ecs_service" {
   }
 }
 
-########################
-#  IAM – Execution Role
-########################
-data "aws_iam_policy_document" "ecs_task_assume" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
+############################
+# Instance Profile usando LabRole existente
+############################
+data "aws_iam_role" "lab" { arn = var.execution_role }
 
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
+data "aws_iam_instance_profile" "lab_profile" {
+  name = data.aws_iam_role.lab.name         # assume que já existe
+}
+
+############################
+# User-data – instala Docker, roda migration e servidor
+############################
+data "template_file" "user_data" {
+  template = file("${path.module}/user_data.sh.tpl")
+  vars = {
+    region      = var.aws_region
+    image_uri   = var.image_uri
+    port        = var.container_port
+    db_host     = var.db_host
+    db_port     = var.db_port
+    db_user     = var.db_user
+    db_password = var.db_password
+    db_name     = var.db_name
   }
 }
 
-resource "aws_iam_role" "ecs_task_exec" {
-  name               = "ecsTaskExecutionRole"      # mesmo nome usado nos tutoriais da AWS
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
+############################
+# EC2
+############################
+resource "aws_instance" "app" {
+  ami                         = "ami-013168dc3850ef002"   # Amazon Linux 2 us-east-1
+  instance_type               = "t3.micro"
+  subnet_id                   = data.aws_subnets.default.ids[0]
+  vpc_security_group_ids      = [aws_security_group.app_sg.id]
+  associate_public_ip_address = true
+  iam_instance_profile        = data.aws_iam_instance_profile.lab_profile.name
+  user_data                   = data.template_file.user_data.rendered
+
+  tags = { Name = var.service_name }
 }
 
-resource "aws_iam_role_policy_attachment" "ecs_task_exec_policy" {
-  role       = aws_iam_role.ecs_task_exec.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-########################
-#  CloudWatch Logs
-########################
-resource "aws_cloudwatch_log_group" "app" {
-  name              = "/ecs/${var.service_name}"
-  retention_in_days = 7
-}
-
-########################
-#  ECS Fargate
-########################
-resource "aws_ecs_cluster" "this" {
-  name = "${var.service_name}-cluster"
-}
-
-resource "aws_ecs_task_definition" "app" {
-  family                   = var.service_name
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = var.cpu
-  memory                   = var.memory
-#  execution_role_arn       = local.execution_role_arn
-  execution_role_arn = aws_iam_role.ecs_task_exec.arn
-
-
-  container_definitions = jsonencode([
-    {
-      name      = var.service_name
-      image     = var.image_uri
-      essential = true
-      portMappings = [
-        { containerPort = var.container_port, protocol = "tcp" }
-      ]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
-        }
-      }
-      environment = [
-        { name = "DB_HOST",     value = var.db_host     },
-        { name = "DB_PORT",     value = var.db_port     },
-        { name = "DB_USER",     value = var.db_user     },
-        { name = "DB_PASSWORD", value = var.db_password },
-        { name = "DB_NAME",     value = var.db_name     }
-      ]
-    }
-  ])
-}
-
-resource "aws_ecs_service" "app" {
-  name            = var.service_name
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.app.arn
-  launch_type     = "FARGATE"
-  desired_count   = 1
-
-  network_configuration {
-    subnets         = data.aws_subnets.default.ids
-    security_groups = [aws_security_group.ecs_service.id]
-    assign_public_ip = true
-  }
-
-  lifecycle {
-    ignore_changes = [task_definition] # Permite atualizar task via update-service
-  }
-}
-
-########################
-#  Run migrations após cada nova task definition
-########################
-resource "null_resource" "migrate" {
-  triggers = {
-    td_revision = aws_ecs_task_definition.app.revision
-  }
-
-  provisioner "local-exec" {
-    command = <<EOT
-    aws ecs run-task \
-      --cluster ${aws_ecs_cluster.this.name} \
-      --launch-type FARGATE \
-      --task-definition ${aws_ecs_task_definition.app.arn} \
-      --network-configuration "awsvpcConfiguration={subnets=[${join(",", data.aws_subnets.default.ids)}],securityGroups=[${aws_security_group.ecs_service.id}],assignPublicIp=ENABLED}" \
-      --overrides '{"containerOverrides":[{"name":"${var.service_name}","command":["alembic","upgrade","head"]}]}'
-    EOT
-  }
+############################
+# Outputs
+############################
+output "public_url" {
+  description = "Endereço público da aplicação"
+  value       = "http://${aws_instance.app.public_ip}:${var.container_port}"
 }

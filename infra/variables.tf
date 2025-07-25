@@ -67,3 +67,8 @@ variable "memory" {
   type        = number
   default         = 512
 }
+
+variable "execution_role" {
+  type        = string
+  default = "arn:aws:iam::049015295261:role/LabRole"
+}
