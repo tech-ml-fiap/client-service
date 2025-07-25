@@ -1,47 +1,68 @@
-terraform {
-  required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 5.51" }
-#    template = { source = "hashicorp/template", version = "~> 2.3" }
-  }
-}
-
-provider "aws" { region = var.aws_region }
-
-############################
-# Rede – VPC/Subnet default
-############################
+################################
+#   Rede – VPC e Subnets
+################################
 data "aws_vpc" "default" { default = true }
-data "aws_subnets" "default" {
+
+data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
 }
 
-
-############################
-# ECR (garantia extra)
-############################
-resource "aws_ecr_repository" "repo" {
-  name = var.service_name
-  lifecycle { prevent_destroy = false }
+################################
+#   IAM – LabRole existente
+################################
+data "aws_iam_role" "lab" {
+  name = var.exec_role_name   # geralmente "LabRole"
 }
 
-############################
-# Security Group
-############################
-resource "aws_security_group" "app_sg" {
-  name        = "${var.service_name}-sg"
-  description = "Public access to application"
+################################
+#   Logs
+################################
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${var.service_name}"
+  retention_in_days = 7
+}
+
+################################
+#   Security-Groups
+################################
+# Alb SG (80 público)
+resource "aws_security_group" "alb_sg" {
+  name        = "${var.service_name}-alb-sg"
+  description = "Public HTTP access to ALB"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    from_port   = var.container_port
-    to_port     = var.container_port
-    protocol    = "tcp"
+  from_port   = 80
+  to_port     = 80
+  protocol    = "tcp"
+  cidr_blocks = ["0.0.0.0/0"]
+}
+
+  egress  {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  egress {
+}
+
+# Tasks SG (porta interna)
+resource "aws_security_group" "task_sg" {
+  name        = "${var.service_name}-task-sg"
+  description = "Allow traffic from ALB"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    from_port       = var.container_port
+    to_port         = var.container_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
+  }
+
+    egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -49,53 +70,125 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
-############################
-# Instance Profile usando LabRole existente
-############################
-data "aws_iam_role" "lab" {
-  name = var.execution_role_name   # "LabRole"
+################################
+#   ECS Cluster & Task
+################################
+resource "aws_ecs_cluster" "this" {
+  name = "${var.service_name}-cluster"
 }
 
-data "aws_iam_instance_profile" "lab_profile" {
-  name = var.execution_role_name   # assume que o instance-profile tem o mesmo nome
+resource "aws_ecs_task_definition" "app" {
+  family                   = var.service_name
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = data.aws_iam_role.lab.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = var.service_name
+      image     = var.image_uri
+      essential = true
+      portMappings = [
+        { containerPort = var.container_port, protocol = "tcp" }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options   = {
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+      environment = [
+        { name = "DB_HOST",     value = var.db_host },
+        { name = "DB_PORT",     value = var.db_port },
+        { name = "DB_USER",     value = var.db_user },
+        { name = "DB_PASSWORD", value = var.db_password },
+        { name = "DB_NAME",     value = var.db_name }
+      ]
+    }
+  ])
 }
 
-############################
-# User-data – instala Docker, roda migration e servidor
-############################
-data "template_file" "user_data" {
-  template = file("${path.module}/user_data.sh.tpl")
-  vars = {
-    region      = var.aws_region
-    image_uri   = var.image_uri
-    port        = var.container_port
-    db_host     = var.db_host
-    db_port     = var.db_port
-    db_user     = var.db_user
-    db_password = var.db_password
-    db_name     = var.db_name
+################################
+#   ALB
+################################
+resource "aws_lb" "app" {
+  name               = "${var.service_name}-alb"
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = data.aws_subnets.public.ids
+}
+
+resource "aws_lb_target_group" "tg" {
+  name        = "${var.service_name}-tg"
+  port        = var.container_port
+  protocol    = "HTTP"
+  vpc_id      = data.aws_vpc.default.id
+  target_type = "ip"
+
+  health_check {
+    path                = "/health"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
   }
 }
 
-############################
-# EC2
-############################
-resource "aws_instance" "app" {
-  ami                         = "ami-013168dc3850ef002"   # Amazon Linux 2 us-east-1
-  instance_type               = "t3.micro"
-  subnet_id                   = data.aws_subnets.default.ids[0]
-  vpc_security_group_ids      = [aws_security_group.app_sg.id]
-  associate_public_ip_address = true
-  iam_instance_profile        = data.aws_iam_instance_profile.lab_profile.name
-  user_data                   = data.template_file.user_data.rendered
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.app.arn
+  port              = 80
+  protocol          = "HTTP"
 
-  tags = { Name = var.service_name }
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg.arn
+  }
 }
 
-############################
-# Outputs
-############################
-output "public_url" {
-  description = "Endereço público da aplicação"
-  value       = "http://${aws_instance.app.public_ip}:${var.container_port}"
+################################
+#   Service
+################################
+resource "aws_ecs_service" "app" {
+  name            = var.service_name
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    assign_public_ip = false                   # tráfego passa pelo ALB
+    subnets          = data.aws_subnets.public.ids
+    security_groups  = [aws_security_group.task_sg.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.tg.arn
+    container_name   = var.service_name
+    container_port   = var.container_port
+  }
+
+  lifecycle { ignore_changes = [task_definition] }
+}
+
+################################
+#   Migrations (alembic)
+################################
+resource "null_resource" "migrate" {
+  triggers = { td = aws_ecs_task_definition.app.revision }
+
+  provisioner "local-exec" {
+    command = <<EOT
+      aws ecs run-task \
+        --cluster ${aws_ecs_cluster.this.name} \
+        --launch-type FARGATE \
+        --task-definition ${aws_ecs_task_definition.app.arn} \
+        --network-configuration "awsvpcConfiguration={subnets=[${join(",", data.aws_subnets.public.ids)}],securityGroups=[${aws_security_group.task_sg.id}],assignPublicIp=ENABLED}" \
+        --overrides '{"containerOverrides":[{"name":"${var.service_name}","command":["alembic","upgrade","head"]}]}'
+    EOT
+  }
 }
