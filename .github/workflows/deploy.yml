@@ -24,9 +24,6 @@ jobs:
         aws-secret-access-key : ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-session-token     : ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region            : ${{ env.AWS_REGION }}
-        role-to-assume        : arn:aws:iam::049015295261:role/LabRole
-        role-session-name     : gha-ci
-        role-skip-session-tagging: true   # evita erro sts:TagSession
 
     # 3) Descobre ACCOUNT_ID e monta REPO_URL
     - id: account
