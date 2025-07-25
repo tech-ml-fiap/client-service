@@ -64,23 +64,29 @@ jobs:
 # ───────────────────
 # Importa ALB/TG se já existem
 # ───────────────────
-    - name: Descobre ALB/TG existentes e importa
+    - name: Importar ALB/TG se existirem
       working-directory: infra/ecs
-      env:
-        REPO_URL: ${{ env.REPO_URL }}
       run: |
         terraform init -input=false
-        LB_ARN=$(aws elbv2 describe-load-balancers --names "${SERVICE_NAME}-alb" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || true)
-        TG_ARN=$(aws elbv2 describe-target-groups --names "${SERVICE_NAME}-tg" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
+        LB_ARN=$(aws elbv2 describe-load-balancers \
+          --names "${SERVICE_NAME}-alb" \
+          --query 'LoadBalancers[0].LoadBalancerArn' \
+          --output text 2>/dev/null || true)
+
+        TG_ARN=$(aws elbv2 describe-target-groups \
+          --names "${SERVICE_NAME}-tg" \
+          --query 'TargetGroups[0].TargetGroupArn' \
+          --output text 2>/dev/null || true)
 
         if [ -n "$LB_ARN" ] && [ "$LB_ARN" != "None" ]; then
-          terraform import aws_lb.app "$LB_ARN" || true
+          terraform import -input=false aws_lb.app "$LB_ARN" || true
         fi
         if [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ]; then
-          terraform import aws_lb_target_group.tg "$TG_ARN" || true
+          terraform import -input=false aws_lb_target_group.tg "$TG_ARN" || true
         fi
+      
 
-# ───────────────────
+      # ───────────────────
 # Fase ECS / ALB
 # ───────────────────
     - name: Terraform – ECS/ALB
