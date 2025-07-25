@@ -1,0 +1,60 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Terraform Apply & ECS Deploy
+    runs-on: ubuntu-latest
+    needs: validate_terraform    # opcional: referencie o job de plan acima
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.7
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Apply
+        env:
+          TF_VAR_db_host     : ${{ secrets.DB_HOST }}
+          TF_VAR_db_port     : ${{ secrets.DB_PORT }}
+          TF_VAR_db_user     : ${{ secrets.DB_USER }}
+          TF_VAR_db_password : ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_name     : ${{ secrets.DB_NAME }}
+        run: terraform apply -auto-approve
+
+      - name: Run DB migrations
+        id: migrate
+        run: |
+            CLUSTER_NAME=$(terraform output -raw cluster_name)
+            TASK_DEFINITION=$(terraform output -raw ecs_task_definition_arn)
+            
+            aws ecs run-task \
+              --cluster $CLUSTER_NAME \
+              --launch-type FARGATE \
+              --task-definition $TASK_DEFINITION \
+              --network-configuration "awsvpcConfiguration={subnets=$(terraform output -json default_subnets),securityGroups=$(terraform output -raw default_sg),assignPublicIp=ENABLED}" \
+              --overrides '{
+                "containerOverrides": [
+                  {
+                    "name": "'${var.service_name}'",
+                    "command": ["alembic","upgrade","head"]
+                  }
+                ]
+              }'
