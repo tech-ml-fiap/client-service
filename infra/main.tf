@@ -1,5 +1,5 @@
 ###############################################################################
-# Terraform – client Service (Elastic Beanstalk + Docker + RDS)
+# Terraform – customer Service (Elastic Beanstalk + Docker + RDS)
 ###############################################################################
 terraform {
   required_version = ">= 1.6"
@@ -36,7 +36,7 @@ variable "token_expire" { type = string }
 data "aws_caller_identity" "me" {}
 
 resource "aws_s3_bucket" "artifacts" {
-  bucket        = "client-service-artifacts-${data.aws_caller_identity.me.account_id}"
+  bucket        = "customer-service-artifacts-${data.aws_caller_identity.me.account_id}"
   force_destroy = true
 }
 
@@ -51,7 +51,7 @@ resource "aws_s3_object" "pkg" {
 # Elastic Beanstalk
 #############################
 resource "aws_elastic_beanstalk_application" "app" {
-  name = "client-service"
+  name = "customer-service"
 }
 
 resource "aws_elastic_beanstalk_application_version" "ver" {
@@ -69,11 +69,11 @@ data "aws_elastic_beanstalk_solution_stack" "docker_al2_latest" {
 resource "random_id" "suffix" { byte_length = 4 }
 
 resource "aws_elastic_beanstalk_environment" "env" {
-  name                = "client-service-env-${random_id.suffix.hex}"
+  name                = "customer-service-env-${random_id.suffix.hex}"
   application         = aws_elastic_beanstalk_application.app.name
   solution_stack_name = data.aws_elastic_beanstalk_solution_stack.docker_al2_latest.name
   version_label       = aws_elastic_beanstalk_application_version.ver.name
-  cname_prefix        = "client-service-${random_id.suffix.hex}"
+  cname_prefix        = "customer-service-${random_id.suffix.hex}"
 
   # Variáveis de ambiente
   dynamic "setting" {

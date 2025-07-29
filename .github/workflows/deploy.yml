@@ -1,11 +1,11 @@
-name: CI/CD client Service
+name: CI/CD costumer Service
 on:
   push:
     branches: [main, master]
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPO:  client-service
+  ECR_REPO:  costumer-service
 
   # Secrets → Actions
   DB_HOST:   ${{ secrets.DB_HOST }}
@@ -86,7 +86,7 @@ jobs:
       run: |
         set -euo pipefail
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        BUCKET="client-service-artifacts-${ACCOUNT_ID}"
+        BUCKET="costumer-service-artifacts-${ACCOUNT_ID}"
 
         import() {
           terraform import \
@@ -107,9 +107,9 @@ jobs:
 
         # Application
         aws elasticbeanstalk describe-applications \
-          --application-name client-service --region $AWS_REGION >/dev/null 2>&1 &&
+          --application-name costumer-service --region $AWS_REGION >/dev/null 2>&1 &&
           ! terraform state list | grep -q '^aws_elastic_beanstalk_application\.app$' &&
-          import aws_elastic_beanstalk_application.app client-service || true
+          import aws_elastic_beanstalk_application.app costumer-service || true
 
         # Bucket
         aws s3api head-bucket --bucket "$BUCKET" --region $AWS_REGION 2>/dev/null &&
@@ -118,7 +118,7 @@ jobs:
 
         # Application Version
         aws elasticbeanstalk describe-application-versions \
-          --application-name client-service \
+          --application-name costumer-service \
           --version-label "$APP_VERSION" --region $AWS_REGION >/dev/null 2>&1 &&
           ! terraform state list | grep -q '^aws_elastic_beanstalk_application_version\.ver$' &&
           import aws_elastic_beanstalk_application_version.ver "$APP_VERSION" || true
