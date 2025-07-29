@@ -1,4 +1,4 @@
-name: CI/CD Customer Service (verbose)
+name: Build & Push Docker (customer-service)
 
 on:
   push:
@@ -6,32 +6,16 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPO:  customer-service
-  # ——— secrets (mesmo bloco de antes) ———
-  DB_HOST:   ${{ secrets.DB_HOST }}
-  DB_PORT:   ${{ secrets.DB_PORT }}
-  DB_USER:   ${{ secrets.DB_USER }}
-  DB_PASS:   ${{ secrets.DB_PASSWORD }}
-  DB_NAME:   ${{ secrets.DB_NAME }}
-  DB_URL:    ${{ secrets.DB_URL }}
-  SECRET_KEY: ${{ secrets.SECRET_KEY }}
-  ALGORITHM:  ${{ secrets.ALGORITHM }}
-  ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+  ECR_REPO:   customer-service     # mesmo nome do Terraform
 
 jobs:
-  deploy:
+  push-image:
     runs-on: ubuntu-latest
-    # ✅ A — debug interno do Actions (precisa estar cadastrado em Secrets mesmo com "false")
-    env:
-      ACTIONS_STEP_DEBUG: ${{ secrets.ACTIONS_STEP_DEBUG }}   # "true" p/ ativar
-      ACTIONS_RUNNER_DEBUG: ${{ secrets.ACTIONS_RUNNER_DEBUG }} # idem
-      TF_LOG: INFO        # ✅ C — faz Terraform cuspir mais detalhes
-      TF_LOG_PATH: terraform.log
-
     steps:
+    # 0) Checa o código
     - uses: actions/checkout@v4
 
-    # Credenciais AWS
+    # 1) Credenciais AWS
     - uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -39,100 +23,34 @@ jobs:
         aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region:            ${{ env.AWS_REGION }}
 
+    # 2) Login no ECR
     - uses: aws-actions/amazon-ecr-login@v2
       with: { mask-password: true }
 
-    # Build & Push
-    - name: Build & Push Docker image
-      id: build
+    # 3) Build & Push
+    - name: Build & Push image
       run: |
-        set -exo pipefail   # ✅ B — mostra cada comando
-        aws ecr describe-repositories --repository-names $ECR_REPO 2>/dev/null \
-          || aws ecr create-repository --repository-name $ECR_REPO --image-tag-mutability MUTABLE
-        IMAGE_URI=$(aws ecr describe-repositories --repository-names $ECR_REPO \
-                    --query 'repositories[0].repositoryUri' --output text)
+        set -euo pipefail
+        # Descobre a URI do repositório
+        IMAGE_URI=$(aws ecr describe-repositories \
+                      --repository-names $ECR_REPO \
+                      --query 'repositories[0].repositoryUri' \
+                      --output text)
+        # Cria o repositório se alguém apagou sem passar pelo Terraform
+        if [ -z "$IMAGE_URI" ]; then
+          aws ecr create-repository --repository-name $ECR_REPO --image-tag-mutability MUTABLE
+          IMAGE_URI=$(aws ecr describe-repositories \
+                        --repository-names $ECR_REPO \
+                        --query 'repositories[0].repositoryUri' \
+                        --output text)
+        fi
+
+        # Tag = SHA do commit
+        TAG=${{ github.sha }}
+
         echo "::group::Docker build"
-        docker build --progress=plain -t $IMAGE_URI:${{ github.sha }} .
-        echo "::endgroup::"
-        docker push $IMAGE_URI:${{ github.sha }}
-        echo "IMAGE_URI=$IMAGE_URI"          >> $GITHUB_ENV
-        echo "APP_VERSION=${{ github.sha }}" >> $GITHUB_ENV
-        docker images | grep customer || true   # lista imagem local
-
-    # Dockerrun
-    - name: Generate Dockerrun & ZIP
-      run: |
-        set -exo pipefail
-        cat > Dockerrun.aws.json <<EOF
-        {
-          "AWSEBDockerrunVersion": "1",
-          "Image": { "Name": "${IMAGE_URI}:${APP_VERSION}", "Update": "true" },
-          "Ports": [ { "ContainerPort": "8000" } ]
-        }
-        EOF
-        cat Dockerrun.aws.json             # imprime conteúdo
-        zip -q deploy.zip Dockerrun.aws.json
-        echo "ZIP_PATH=$(pwd)/deploy.zip" >> $GITHUB_ENV
-        unzip -l deploy.zip               # lista arquivos no ZIP
-
-    # Terraform
-    - uses: hashicorp/setup-terraform@v3
-      with: { terraform_version: 1.6.5 }
-
-    - name: Terraform Init
-      working-directory: infra
-      run: |
-        set -exo pipefail
-        terraform init -input=false -upgrade
-
-    # Import…
-    - name: Importar recursos existentes
-      working-directory: infra
-      run: |
-        set -exo pipefail
-        # (mesmo script anterior…)
-
-    # Apply
-    - name: Terraform Apply
-      working-directory: infra
-      run: |
-        set -exo pipefail
-        terraform apply -auto-approve -input=false \
-          -var="app_version=${APP_VERSION}" \
-          -var="artifact_zip=${ZIP_PATH}" \
-          -var="db_host=${DB_HOST}" \
-          -var="db_port=${DB_PORT}" \
-          -var="db_user=${DB_USER}" \
-          -var="db_password=${DB_PASS}" \
-          -var="db_name=${DB_NAME}" \
-          -var="db_url=${DB_URL}" \
-          -var="secret_key=${SECRET_KEY}" \
-          -var="algorithm=${ALGORITHM}" \
-          -var="token_expire=${ACCESS_TOKEN_EXPIRE_MINUTES}"
-
-    # ✅ D — se falhar, puxa eventos do EB
-    - name: Dump EB events on failure
-      if: failure()
-      shell: bash
-      run: |
-        APP=customer-service
-        ENV=$(aws elasticbeanstalk describe-environments --application-name $APP \
-               --query 'Environments[0].EnvironmentName' --output text)
-        echo "::group::Last 50 EB events"
-        aws elasticbeanstalk describe-events \
-          --environment-name "$ENV" --max-items 50 \
-          --query 'Events[*].[EventDate,Severity,Message]' --output table
+        docker build --progress=plain -t $IMAGE_URI:$TAG .
         echo "::endgroup::"
 
-    # URL final
-    - name: Show service URL
-      working-directory: infra
-      run: echo "🟢 URL -> $(terraform output -raw service_url)"
-
-    # Opcional — publica o terraform.log como artefato
-    - name: Upload terraform.log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: terraform-log
-        path: infra/terraform.log
+        docker push $IMAGE_URI:$TAG
+        echo "📦  Pushed => $IMAGE_URI:$TAG"
