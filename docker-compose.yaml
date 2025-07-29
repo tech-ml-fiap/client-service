@@ -53,4 +53,4 @@ volumes:
 networks:
   fastfood:
     external: true
-    name: fastfood-service
+    name: fastfood-net
