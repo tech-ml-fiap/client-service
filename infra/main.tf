@@ -111,6 +111,7 @@ resource "aws_elastic_beanstalk_environment" "env" {
 # Saída
 #############################
 output "service_url" {
-  description = "Endpoint público da API"
-  value       = "http://${aws_elastic_beanstalk_environment.env.endpoint_url}"
+  value       = "http://${aws_elastic_beanstalk_environment.env.cname}"
+  description = "CNAME público do ambiente"
 }
+
