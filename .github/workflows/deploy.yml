@@ -130,6 +130,22 @@ jobs:
           -var="secret_key=${SECRET_KEY}" \
           -var="algorithm=${ALGORITHM}" \
           -var="token_expire=${ACCESS_TOKEN_EXPIRE_MINUTES}"
+        
+    - name: Run Alembic migrations
+      env:
+        DATABASE_URL: ${{ secrets.DB_URL }}
+      run: |
+        # aguarda o ambiente ficar 100% verde
+        aws elasticbeanstalk wait environment-update-complete \
+          --environment-id $(aws elasticbeanstalk describe-environments \
+               --application-name client-service \
+               --query 'Environments[0].EnvironmentId' --output text)
+    
+        # executa o contêiner em modo transient apenas para migrar
+        docker run --rm \
+          -e DATABASE_URL=$DATABASE_URL \
+          $IMAGE_URI:${{ env.APP_VERSION }} \
+          alembic upgrade head
 
     # 9) Exibe a URL pública
     - name: Show service URL
