@@ -1,5 +1,4 @@
 name: CI/CD client Service
-
 on:
   push:
     branches: [main, master]
@@ -8,7 +7,7 @@ env:
   AWS_REGION: us-east-1
   ECR_REPO:  client-service
 
-  # Variáveis sensíveis (GitHub → Settings → Secrets → Actions)
+  # Secrets → Actions
   DB_HOST:   ${{ secrets.DB_HOST }}
   DB_PORT:   ${{ secrets.DB_PORT }}
   DB_USER:   ${{ secrets.DB_USER }}
@@ -17,6 +16,7 @@ env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   ALGORITHM:  ${{ secrets.ALGORITHM }}
   ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+  DB_URL:    ${{ secrets.DB_URL }}
 
 jobs:
   deploy:
@@ -34,13 +34,16 @@ jobs:
         aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region:            ${{ env.AWS_REGION }}
 
-    # 3) Login ECR
+    # 3) Login no ECR
     - uses: aws-actions/amazon-ecr-login@v2
+      with: { mask-password: true }
 
-    # 4) Build & push da imagem
-    - name: Build & Push image
+    # 4) Build & Push da imagem (tag = SHA do commit)
+    - name: Build & Push Docker image
       id: build
+      shell: bash
       run: |
+        set -euo pipefail
         aws ecr describe-repositories --repository-names $ECR_REPO 2>/dev/null \
           || aws ecr create-repository --repository-name $ECR_REPO --image-tag-mutability MUTABLE
 
@@ -50,42 +53,41 @@ jobs:
         docker build -t $IMAGE_URI:${{ github.sha }} .
         docker push     $IMAGE_URI:${{ github.sha }}
 
-        echo "IMAGE_URI=$IMAGE_URI:${{ github.sha }}" >> $GITHUB_ENV
-        echo "APP_VERSION=${{ github.sha }}"        >> $GITHUB_ENV
+        echo "IMAGE_URI=$IMAGE_URI"          >> $GITHUB_ENV
+        echo "APP_VERSION=${{ github.sha }}" >> $GITHUB_ENV
 
-    # 5) Gera Dockerrun e zipa
+    # 5) Gera Dockerrun e ZIP
     - name: Generate Dockerrun & ZIP
+      shell: bash
       run: |
         cat > Dockerrun.aws.json <<EOF
         {
           "AWSEBDockerrunVersion": "1",
-          "Image": { "Name": "${IMAGE_URI}", "Update": "true" },
+          "Image": { "Name": "${IMAGE_URI}:${APP_VERSION}", "Update": "true" },
           "Ports": [ { "ContainerPort": "8000" } ]
         }
         EOF
         zip -q deploy.zip Dockerrun.aws.json
         echo "ZIP_PATH=$(pwd)/deploy.zip" >> $GITHUB_ENV
 
-    # 6) Terraform Init
+    # 6) Instala Terraform
     - uses: hashicorp/setup-terraform@v3
       with: { terraform_version: 1.6.5 }
 
+    # 7) Terraform Init
     - name: Terraform Init
       working-directory: infra
       run: terraform init -input=false
 
-    # 7) Importa app + bucket, se já existirem (idempotente)
-    - name: Importar recursos se já existirem
+    # 8) Importa app, bucket e version se já existirem
+    - name: Importar recursos existentes
       working-directory: infra
       shell: bash
       run: |
         set -euo pipefail
-        set -x
-
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
         BUCKET="client-service-artifacts-${ACCOUNT_ID}"
 
-        # ---- Função de import idempotente ----
         import() {
           terraform import \
             -var="app_version=${APP_VERSION}" \
@@ -101,21 +103,27 @@ jobs:
             "$@"
         }
 
-        # Evita erro se o state ainda não existe
         terraform state list >/dev/null 2>&1 || true
 
-        # ---------- Aplicação EB ----------
+        # Application
         aws elasticbeanstalk describe-applications \
-          --application-names client-service --query 'Applications[0]' --output text >/dev/null 2>&1 &&
+          --application-name client-service --region $AWS_REGION >/dev/null 2>&1 &&
           ! terraform state list | grep -q '^aws_elastic_beanstalk_application\.app$' &&
           import aws_elastic_beanstalk_application.app client-service || true
 
-        # ---------- Bucket ----------
-        aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null &&
+        # Bucket
+        aws s3api head-bucket --bucket "$BUCKET" --region $AWS_REGION 2>/dev/null &&
           ! terraform state list | grep -q '^aws_s3_bucket\.artifacts$' &&
-          import aws_s3_bucket.artifacts "$BUCKET" || true  
+          import aws_s3_bucket.artifacts "$BUCKET" || true
 
-      # 8) Terraform Apply
+        # Application Version
+        aws elasticbeanstalk describe-application-versions \
+          --application-name client-service \
+          --version-label "$APP_VERSION" --region $AWS_REGION >/dev/null 2>&1 &&
+          ! terraform state list | grep -q '^aws_elastic_beanstalk_application_version\.ver$' &&
+          import aws_elastic_beanstalk_application_version.ver "$APP_VERSION" || true
+
+    # 9) Terraform Apply
     - name: Terraform Apply
       working-directory: infra
       run: |
@@ -130,24 +138,7 @@ jobs:
           -var="secret_key=${SECRET_KEY}" \
           -var="algorithm=${ALGORITHM}" \
           -var="token_expire=${ACCESS_TOKEN_EXPIRE_MINUTES}"
-        
-    - name: Run Alembic migrations
-      env:
-        DATABASE_URL: ${{ secrets.DB_URL }}
-      run: |
-        # aguarda o ambiente ficar 100% verde
-        aws elasticbeanstalk wait environment-update-complete \
-          --environment-id $(aws elasticbeanstalk describe-environments \
-               --application-name client-service \
-               --query 'Environments[0].EnvironmentId' --output text)
-    
-        # executa o contêiner em modo transient apenas para migrar
-        docker run --rm \
-          -e DATABASE_URL=$DATABASE_URL \
-          $IMAGE_URI:${{ env.APP_VERSION }} \
-          alembic upgrade head
 
-    # 9) Exibe a URL pública
     - name: Show service URL
       working-directory: infra
       run: echo "🟢 URL -> $(terraform output -raw service_url)"
