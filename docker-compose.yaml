@@ -18,7 +18,7 @@ services:
       interval: 5s
       timeout: 2s
       retries: 5
-    networks: [fastfood]
+    networks: [video]
 
   migrations:
     build: .
@@ -30,7 +30,7 @@ services:
     command: alembic upgrade head
     volumes:
       - .:/app
-    networks: [fastfood]
+    networks: [video]
 
   web:
     build: .
@@ -45,12 +45,12 @@ services:
       uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - .:/app
-    networks: [fastfood]
+    networks: [video]
 
 volumes:
   clientservice_db_data:
 
 networks:
-  fastfood:
+  video:
     external: true
-    name: fastfood-service
+    name: video-net
