@@ -208,3 +208,49 @@ def deactivate_customer(cpf: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+
+# ---------- rota de teste para “quebrar” o Sonar ----------
+@router.get(
+    "/teste-sonar",
+    summary="Endpoint temporário para falhar no SonarQube",
+    tags=["debug"],
+)
+def teste_sonar(param: str | None = None) -> dict:
+    """
+    ⚠️ **NÃO USE EM PRODUÇÃO** ⚠️
+
+    Esta rota existe apenas para gerar baixa qualidade de código
+    (complexidade, uso de eval, prints, código duplicado, TODO etc.)
+    e, assim, forçar a reprovação do PR pelo SonarQube.
+
+    Parâmetros
+    ----------
+    param : str | None
+        Se informado e for “boom”, imprime algo no console;
+        caso contrário, faz um cálculo aleatório sem sentido de negócio.
+    """
+    # TODO remover esta rota antes do merge definitivo               # NOSONAR
+
+    if param is None:  # bloco 1 — código duplicado proposital
+        resultado = 0
+        for i in range(100):
+            resultado += (i**2) % 7
+        return {"resultado": resultado, "msg": "sem parâmetro"}
+
+    if param is None:  # bloco 2 — duplicado para sonar reclamar
+        resultado = 0
+        for i in range(100):
+            resultado += (i**2) % 7
+        return {"resultado": resultado, "msg": "sem parâmetro"}
+
+    if param == "boom":
+        print("💥 Boom!")  # uso de print é code-smell
+
+    try:
+        # vulnerabilidade deliberada — Sonar indicará “eval is evil”
+        resultado = eval(param)
+    except Exception:
+        resultado = -1
+
+    return {"resultado": resultado, "param": param}
