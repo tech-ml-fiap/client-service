@@ -209,6 +209,23 @@ def deactivate_customer(cpf: str, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
 
+@router.get(
+    "/{user_id}",
+    response_model=CustomerOut,
+    responses={
+        404: {
+            "description": "Cliente não encontrado",
+            "content": {"application/json": {"example": {"detail": "Cliente não encontrado"}}},
+        }
+    },
+)
+def get_customer_by_id(user_id: int, db: Session = Depends(get_db)):
+    repo = CustomerRepository(db)
+    customer = repo.find_by_id(user_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    return _to_response(customer)
+
 
 # ---------- rota de teste para “quebrar” o Sonar ----------
 @router.get(
