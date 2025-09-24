@@ -12,6 +12,7 @@ class CustomerIn(BaseModel):
     name: str = Field(min_length=2, max_length=150)
     cpf: constr(pattern=CPF_PATTERN)
     email: EmailStr
+    password: constr(min_length=8)
 
 
 class CustomerUpdateIn(BaseModel):
@@ -49,3 +50,8 @@ class TokenVerifyOut(BaseModel):
     name: str
     cpf: str
     email: EmailStr
+
+
+class AuthIn(BaseModel):
+    identifier: str  # cpf OU email
+    password: constr(min_length=8)

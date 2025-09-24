@@ -83,7 +83,12 @@ def test_verify_token_success():
     # 1) cria o cliente
     cr = client.post(
         "/api/client",
-        json={"name": "Ana", "cpf": "123.456.789-09", "email": "ana@mail.com"},
+        json={
+            "name": "Ana",
+            "cpf": "123.456.789-09",
+            "email": "ana@mail.com",
+            "password": "<PASSWORD123>",
+        },
     )
     assert cr.status_code == 201
 
