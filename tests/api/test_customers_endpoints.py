@@ -7,7 +7,12 @@ client = TestClient(app)
 def test_post_customer_and_list():
     r = client.post(
         "api/client",
-        json={"name": "Ana", "cpf": "123.456.789-09", "email": "ana@mail.com"},
+        json={
+            "name": "Ana",
+            "cpf": "123.456.789-09",
+            "email": "ana@mail.com",
+            "password": "teste12345",
+        },
     )
     assert r.status_code == 201
     cust = r.json()
