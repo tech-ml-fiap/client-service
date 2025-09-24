@@ -28,6 +28,7 @@ class CustomerRepository(CustomerRepositoryPort):
             active=model.active,
             created_at=model.created_at,
             updated_at=model.updated_at,
+            password_hash=model.password_hash,
         )
 
     @staticmethod
@@ -41,6 +42,7 @@ class CustomerRepository(CustomerRepositoryPort):
             name=customer.name,
             cpf=self._sanitize_cpf(customer.cpf.value),
             email=customer.email.value,
+            password_hash=customer.password_hash,
         )
         self.session.add(model)
         self.session.commit()

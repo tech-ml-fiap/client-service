@@ -4,12 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.adapters.driven.repositories.customer import CustomerRepository
+from app.adapters.driven.security.bcrypt_hasher import BcryptPasswordHasher
 from app.adapters.driver.controllers.schemas import (
     CustomerOut,
     CustomerIn,
     CustomersOut,
     CustomerIdentifyOut,
     CustomerUpdateIn,
+    AuthIn,
 )
 from app.domain.entities.customer import Customer
 from app.adapters.driver.dependencies import get_db
@@ -21,6 +23,7 @@ from app.domain.value_objects.cpf import CPF
 from app.domain.value_objects.email import Email
 
 router = APIRouter()
+hasher = BcryptPasswordHasher()
 
 
 # ---------- helpers ----------
@@ -74,7 +77,7 @@ def _to_response(entity: Customer) -> CustomerOut:
     },
 )
 def create_customer(payload: CustomerIn, db: Session = Depends(get_db)):
-    service = CreateCustomerService(CustomerRepository(db))
+    service = CreateCustomerService(CustomerRepository(db), hasher)
 
     try:
         cpf_vo = CPF(payload.cpf)
@@ -85,8 +88,9 @@ def create_customer(payload: CustomerIn, db: Session = Depends(get_db)):
             name=payload.name,
             cpf=cpf_vo,
             email=email_vo,
+            password_hash="",
         )
-        created = service.execute(customer)
+        created = service.execute(customer, payload.password)
         return _to_response(created)
 
     except ValueError as e:
@@ -112,15 +116,16 @@ def list_customers(db: Session = Depends(get_db)):
     ]
 
 
-@router.get(
-    "/cpf/{cpf}",
+@router.post(
+    "/auth/login",
     response_model=CustomerIdentifyOut,
-    responses={400: {"description": "CPF inválido ou não encontrado"}},
+    responses={400: {"description": "Credenciais inválidas"}},
 )
-def identify_customer(cpf: str, db: Session = Depends(get_db)):
-    service = IdentifyCustomerService(CustomerRepository(db))
+def login(payload: AuthIn, db: Session = Depends(get_db)):
+    service = IdentifyCustomerService(CustomerRepository(db), hasher)
     try:
-        return CustomerIdentifyOut(jwt=service.execute(cpf))
+        token = service.execute(payload.identifier, payload.password)
+        return CustomerIdentifyOut(jwt=token)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

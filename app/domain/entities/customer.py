@@ -13,6 +13,7 @@ class Customer:
     name: str
     cpf: CPF
     email: Email
+    password_hash: str
     active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
