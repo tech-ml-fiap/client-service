@@ -30,6 +30,7 @@ def make_customer(
     cpf_value="12345678909",
     email_value="orig@mail.com",
     active=True,
+    password_hash="testesenha",
 ):
     return Customer(
         id=id,
@@ -37,6 +38,7 @@ def make_customer(
         cpf=CPF(cpf_value),
         email=Email(email_value),
         active=active,
+        password_hash=password_hash,
     )
 
 

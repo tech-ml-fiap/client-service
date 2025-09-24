@@ -41,6 +41,7 @@ def test_create_and_find_by_id(repo):
         name="Alice",
         cpf=CPF("12345678909"),
         email=Email("alice@mail.com"),
+        password_hash="<PASSWORD>",
     )
     created = repo.create(cust)
 
@@ -57,6 +58,7 @@ def test_update_success(repo):
         name="Bob",
         cpf=CPF("12345678909"),
         email=Email("bob@mail.com"),
+        password_hash="<PASSWORD>",
     )
     created = repo.create(cust)
 
@@ -76,6 +78,7 @@ def test_update_not_found(repo):
         name="Nobody",
         cpf=CPF("12345678909"),
         email=Email("no@mail.com"),
+        password_hash="<PASSWORD>",
     )
     with pytest.raises(ValueError, match="Customer not found"):
         repo.update(fake)
@@ -87,6 +90,7 @@ def test_delete(repo):
         name="Carol",
         cpf=CPF("12345678909"),
         email=Email("carol@mail.com"),
+        password_hash="<PASSWORD>",
     )
     created = repo.create(cust)
 
