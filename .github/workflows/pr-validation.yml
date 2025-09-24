@@ -54,7 +54,7 @@ jobs:
             cat coverage.xml
 
         - name: SonarCloud Scan
-          uses: sonarsource/sonarcloud-github-action@v2
+          uses: SonarSource/sonarqube-scan-action@v6
           env:
             SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
           with:
