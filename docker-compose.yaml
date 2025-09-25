@@ -3,10 +3,10 @@ version: "3.9"
 services:
   dd-agent:
     image: gcr.io/datadoghq/agent:7
-    container_name: dd-agent
+    container_name: dd-agent-client-service
     restart: unless-stopped
     environment:
-      - DD_API_KEY=${DD_API_KEY}          # defina no .env ou como secret
+      - DD_API_KEY=${DD_API_KEY}
       - DD_SITE=datadoghq.com
       - DD_ENV=dev
       - DD_APM_ENABLED=true
