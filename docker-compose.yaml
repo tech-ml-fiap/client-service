@@ -12,9 +12,12 @@ services:
       - DD_APM_ENABLED=true
       - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
       - DD_TAGS=project:clientservice
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_CONTAINER_LABELS_AS_TAGS={"com.docker.compose.service":"service","com.docker.compose.project":"project"}
     ports:
-      - "8126:8126"        # APM
-      - "8125:8125/udp"    # DogStatsD
+      - "8126:8126"
+      - "8125:8125/udp"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
@@ -25,8 +28,7 @@ services:
   db:
     image: postgres:15-alpine
     container_name: clientservice-db
-    ports:
-      - "5434:5432"
+    ports: ["5434:5432"]
     env_file: .env
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -40,6 +42,9 @@ services:
       timeout: 2s
       retries: 5
     networks: [video]
+    labels:
+      com.datadoghq.ad.logs: >-
+        [{"source":"postgresql","service":"client-db"}]
 
   migrations:
     build: .
@@ -52,12 +57,14 @@ services:
     volumes:
       - .:/app
     networks: [video]
+    labels:
+      com.datadoghq.ad.logs: >-
+        [{"source":"python","service":"client-migrations"}]
 
   web:
     build: .
     container_name: clientservice-web
-    ports:
-      - "8004:8000"
+    ports: ["8004:8000"]
     env_file: .env
     depends_on:
       db:
@@ -75,7 +82,11 @@ services:
       - DD_AGENT_HOST=dd-agent
       - DD_TRACE_AGENT_PORT=8126
       - DD_TAGS=project:clientservice
+      - DD_LOGS_INJECTION=true
     networks: [video]
+    labels:
+      com.datadoghq.ad.logs: >-
+        [{"source":"python","service":"clientservice-web"}]
 
 volumes:
   clientservice_db_data:
