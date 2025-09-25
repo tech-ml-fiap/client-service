@@ -1,11 +1,32 @@
 version: "3.9"
 
 services:
+  dd-agent:
+    image: gcr.io/datadoghq/agent:7
+    container_name: dd-agent
+    restart: unless-stopped
+    environment:
+      - DD_API_KEY=${DD_API_KEY}          # defina no .env ou como secret
+      - DD_SITE=datadoghq.com
+      - DD_ENV=dev
+      - DD_APM_ENABLED=true
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_TAGS=project:clientservice
+    ports:
+      - "8126:8126"        # APM
+      - "8125:8125/udp"    # DogStatsD
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks: [video]
+
   db:
     image: postgres:15-alpine
     container_name: clientservice-db
     ports:
-      - "5434:5432"  # Evita conflito com outro serviço
+      - "5434:5432"
     env_file: .env
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -41,10 +62,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      dd-agent:
+        condition: service_started
     command: >
-      uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      ddtrace-run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - .:/app
+    environment:
+      - DD_SERVICE=clientservice-web
+      - DD_ENV=dev
+      - DD_VERSION=1.0.0
+      - DD_AGENT_HOST=dd-agent
+      - DD_TRACE_AGENT_PORT=8126
+      - DD_TAGS=project:clientservice
     networks: [video]
 
 volumes:
