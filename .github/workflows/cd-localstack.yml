@@ -9,36 +9,23 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    services:
-      db:
-        image: postgres:15-alpine
-        ports:
-          - 5434:5432
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: client_db
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=5s
-          --health-timeout=2s
-          --health-retries=5
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Build da imagem
       - name: Build application image
         run: |
           docker build -t clientservice:${{ github.sha }} .
 
+      # Prepara .env com secrets
       - name: Prepare .env for container
         run: |
           cat > .env << 'EOF'
-          DB_HOST=localhost
-          DB_PORT=5434
+          DB_HOST=db
+          DB_PORT=5432
           DB_USER=${{ secrets.DB_USER }}
           DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           DB_NAME=${{ secrets.DB_NAME }}
@@ -49,23 +36,38 @@ jobs:
           EOF
           echo "Preview do .env gerado:"; head -n 10 .env
 
+      # Sobe só o Postgres
+      - name: Start Postgres
+        run: docker compose up -d db
+
+      # Espera DB ficar pronto
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            if docker exec clientservice-db pg_isready -U ${{ secrets.DB_USER }}; then
+              echo "✅ Postgres pronto"; exit 0
+            fi
+            echo "⏳ Aguardando Postgres..."; sleep 2
+          done
+          exit 1
+
+      # Roda migrations no container da app
       - name: Run migrations
         run: |
           docker run --rm \
             --env-file .env \
             -v ${{ github.workspace }}:/app \
             -w /app \
+            --network video-net \
             clientservice:${{ github.sha }} \
             alembic upgrade head
 
+      # Sobe a app
       - name: Launch app
         run: |
-          docker run -d --name clientservice-web \
-            --env-file .env \
-            -p 8004:8000 \
-            clientservice:${{ github.sha }} \
-            uvicorn main:app --host 0.0.0.0 --port 8000
+          docker compose up -d web
 
+      # Healthcheck
       - name: Health check (HTTP)
         run: |
           set -e
@@ -74,16 +76,20 @@ jobs:
             if [ "$code" = "200" ]; then
               echo "✅ clientservice UP (/docs 200)"; exit 0
             fi
-            echo "Aguardando app... código=$code"; sleep 2
+            echo "⏳ Aguardando app... código=$code"; sleep 2
           done
           docker logs clientservice-web; exit 1
 
+      # Exporta logs
       - name: Export logs
         run: |
           docker logs clientservice-web > clientservice.log || true
+          docker logs clientservice-db > postgres.log || true
 
       - name: Upload run logs
         uses: actions/upload-artifact@v4
         with:
           name: cd-clientservice-logs
-          path: clientservice.log
+          path: |
+            clientservice.log
+            postgres.log
