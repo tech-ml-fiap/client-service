@@ -36,6 +36,10 @@ jobs:
           EOF
           echo "Preview do .env gerado:"; head -n 10 .env
 
+      # Cria a rede externa (se não existir)
+      - name: Create external network
+        run: docker network create video-net || true
+
       # Sobe só o Postgres
       - name: Start Postgres
         run: docker compose up -d db
