@@ -16,7 +16,7 @@ jobs:
           - 5434:5432
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: client_db
         options: >-
           --health-cmd="pg_isready -U postgres"
@@ -37,8 +37,8 @@ jobs:
       - name: Prepare .env for container
         run: |
           cat > .env << 'EOF'
-          DB_HOST=db
-          DB_PORT=5432
+          DB_HOST=localhost
+          DB_PORT=5434
           DB_USER=${{ secrets.DB_USER }}
           DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           DB_NAME=${{ secrets.DB_NAME }}
@@ -49,15 +49,9 @@ jobs:
           EOF
           echo "Preview do .env gerado:"; head -n 10 .env
 
-      - name: Create external network (video-net)
-        run: |
-          docker network create video-net || true
-          docker network ls
-
       - name: Run migrations
         run: |
           docker run --rm \
-            --network video-net \
             --env-file .env \
             -v ${{ github.workspace }}:/app \
             -w /app \
@@ -67,7 +61,6 @@ jobs:
       - name: Launch app
         run: |
           docker run -d --name clientservice-web \
-            --network video-net \
             --env-file .env \
             -p 8004:8000 \
             clientservice:${{ github.sha }} \
@@ -79,7 +72,7 @@ jobs:
           for i in {1..30}; do
             code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8004/docs || true)
             if [ "$code" = "200" ]; then
-              echo "clientservice UP (/docs 200)"; exit 0
+              echo "✅ clientservice UP (/docs 200)"; exit 0
             fi
             echo "Aguardando app... código=$code"; sleep 2
           done
