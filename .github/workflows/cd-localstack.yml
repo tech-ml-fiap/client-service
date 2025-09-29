@@ -15,11 +15,11 @@ jobs:
         ports:
           - 5434:5432
         env:
-          POSTGRES_USER: ${{ secrets.DB_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          POSTGRES_DB: ${{ secrets.DB_NAME }}
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: client_db
         options: >-
-          --health-cmd="pg_isready -U ${{ secrets.DB_USER }}"
+          --health-cmd="pg_isready -U postgres"
           --health-interval=5s
           --health-timeout=2s
           --health-retries=5
@@ -37,8 +37,8 @@ jobs:
       - name: Prepare .env for container
         run: |
           cat > .env << 'EOF'
-          DB_HOST=${{ secrets.DB_HOST }}
-          DB_PORT=${{ secrets.DB_PORT }}
+          DB_HOST=db
+          DB_PORT=5432
           DB_USER=${{ secrets.DB_USER }}
           DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           DB_NAME=${{ secrets.DB_NAME }}
@@ -87,4 +87,10 @@ jobs:
 
       - name: Export logs
         run: |
-          docker logs clientservice-web > clientservice.
+          docker logs clientservice-web > clientservice.log || true
+
+      - name: Upload run logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cd-clientservice-logs
+          path: clientservice.log
