@@ -1,0 +1,90 @@
+name: CD ClientService Demo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgres:15-alpine
+        ports:
+          - 5434:5432
+        env:
+          POSTGRES_USER: ${{ secrets.DB_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.DB_NAME }}
+        options: >-
+          --health-cmd="pg_isready -U ${{ secrets.DB_USER }}"
+          --health-interval=5s
+          --health-timeout=2s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build application image
+        run: |
+          docker build -t clientservice:${{ github.sha }} .
+
+      - name: Prepare .env for container
+        run: |
+          cat > .env << 'EOF'
+          DB_HOST=${{ secrets.DB_HOST }}
+          DB_PORT=${{ secrets.DB_PORT }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          SECRET_KEY=${{ secrets.SECRET_KEY }}
+          ALGORITHM=HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES=30
+          DD_API_KEY=${{ secrets.DD_API_KEY }}
+          EOF
+          echo "Preview do .env gerado:"; head -n 10 .env
+
+      - name: Create external network (video-net)
+        run: |
+          docker network create video-net || true
+          docker network ls
+
+      - name: Run migrations
+        run: |
+          docker run --rm \
+            --network video-net \
+            --env-file .env \
+            -v ${{ github.workspace }}:/app \
+            -w /app \
+            clientservice:${{ github.sha }} \
+            alembic upgrade head
+
+      - name: Launch app
+        run: |
+          docker run -d --name clientservice-web \
+            --network video-net \
+            --env-file .env \
+            -p 8004:8000 \
+            clientservice:${{ github.sha }} \
+            uvicorn main:app --host 0.0.0.0 --port 8000
+
+      - name: Health check (HTTP)
+        run: |
+          set -e
+          for i in {1..30}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8004/docs || true)
+            if [ "$code" = "200" ]; then
+              echo "clientservice UP (/docs 200)"; exit 0
+            fi
+            echo "Aguardando app... código=$code"; sleep 2
+          done
+          docker logs clientservice-web; exit 1
+
+      - name: Export logs
+        run: |
+          docker logs clientservice-web > clientservice.
